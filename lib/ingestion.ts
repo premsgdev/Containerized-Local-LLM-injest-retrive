@@ -1,15 +1,16 @@
-import * as fs from 'fs';
+import * as fs from 'fs/promises';
 import * as path from 'path';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { GoogleGenAI } from '@google/genai';
 import { ChromaClient } from 'chromadb-client';
+import pdf from 'pdf-parse';
 
-const PDFParser = require("pdf2json");
 
 const DOCUMENTS_DIR = path.join(process.cwd(), 'documents');
 const COLLECTION_NAME = 'kummatty_policies';
 const EMBEDDING_MODEL = 'models/embedding-001';
 const CHROMA_HOST = process.env.CHROMA_HOST || 'http://localhost:8000';
+const BATCH_SIZE = 100;
 
 const apiKey = process.env.GEMINI_API_KEY;
 if (!apiKey) {
@@ -36,75 +37,67 @@ async function getOrCreateCollection() {
  * @returns The extracted text.
  */
 async function extractTextFromPdf(filePath: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const pdfParser = new PDFParser(null, 1);
-    
-    pdfParser.on("pdfParser_dataReady", (pdfData: { Pages: { Texts: { R: { T: string }[] }[] }[] }) => {
-      let fullText = "";
-      
-      pdfData.Pages.forEach(page => {
-        const pageText = page.Texts
-          .map(textBlock => textBlock.R)
-          .flat()
-          .map(textRun => decodeURIComponent(textRun.T))
-          .join(' ');
-        
-        fullText += pageText + '\n\n';
-      });
+  const dataBuffer = await fs.readFile(filePath);
 
-      resolve(fullText);
-    });
+  if (typeof pdf !== 'function') {
+      throw new Error("PDF parsing failed: The 'pdf-parse' module did not export a callable function correctly.");
+  }
 
-    pdfParser.on("pdfParser_dataError", (errData: { parserError: string }) => {
-      reject(new Error(`PDF parsing error: ${errData.parserError}`));
-    });
+  const data = await pdf(dataBuffer);
 
-    pdfParser.loadPDF(filePath);
-  });
+  return data.text.trim();
 }
 
-/**
- * @param text The full document text.
- * @returns An array of text chunks.
- */
-async function chunkText(text: string): Promise<string[]> {
-  const splitter = new RecursiveCharacterTextSplitter({
-    chunkSize: 1000,
-    chunkOverlap: 200,
-    separators: ["\n\n", "\n", " ", ""],
-  });
-  const chunks = await splitter.splitText(text);
-  console.log(`Split document into ${chunks.length} chunks.`);
-  return chunks;
-}
 
 /**
  * @param chunks An array of text chunks.
  * @returns An array of embedding vectors.
  */
-async function generateEmbeddings(chunks: string[]): Promise<number[][]> {
-  console.log(`Generating embeddings for ${chunks.length} chunks using ${EMBEDDING_MODEL}...`);
+async function generateEmbeddings(allChunks: string[]): Promise<number[][]> {
+  console.log(`Generating embeddings for ${allChunks.length} chunks using ${EMBEDDING_MODEL}...`);
   
-  const response = await ai.models.embedContent({
-    model: EMBEDDING_MODEL,
-    contents: chunks.map(text => ({ parts: [{ text }] })),
-  });
+  const totalChunks = allChunks.length;
+  let allEmbeddings: number[][] = [];
+  
+  for (let i = 0; i < totalChunks; i += BATCH_SIZE) {
+    const batch = allChunks.slice(i, i + BATCH_SIZE);
+    const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
+    console.log(`Processing batch ${batchNumber}/${Math.ceil(totalChunks / BATCH_SIZE)} (Size: ${batch.length})...`);
+    
+    try {
+      const response = await ai.models.embedContent({
+        model: EMBEDDING_MODEL,
+        contents: batch.map(text => ({ parts: [{ text }] })),
+      });
 
-  if (!response.embeddings || response.embeddings.length === 0) {
-    console.error("Embedding API Response:", response);
-    throw new Error("Failed to generate embeddings. The API response did not contain the expected 'embeddings' data.");
+      if (!response.embeddings || response.embeddings.length === 0) {
+        throw new Error(`Batch ${batchNumber} failed to return embeddings.`);
+      }
+
+      const embeddings = response.embeddings.map(e => e.values as number[]);
+      allEmbeddings = allEmbeddings.concat(embeddings);
+      
+    } catch (e: any) {
+      console.error(`Embedding API Error on batch ${batchNumber}:`, e.message);
+      throw new Error("Failed to call Gemini Embedding API. Check API Key and network connection.");
+    }
   }
 
-  const embeddings = response.embeddings.map(e => e.values as number[]);
-  console.log('Embeddings generated successfully.');
-  return embeddings;
+  console.log('All embeddings generated successfully.');
+  return allEmbeddings;
 }
 
 export async function ingestDocuments(): Promise<{ success: boolean; count: number; error?: string }> {
+  const splitter = new RecursiveCharacterTextSplitter({
+    chunkSize: 1000,
+    chunkOverlap: 200,
+    separators: ["\n\n", "\n", " ", ""],
+  });
+
   try {
     const collection = await getOrCreateCollection();
     
-    const files = fs.readdirSync(DOCUMENTS_DIR).filter(file => file.endsWith('.pdf'));
+    const files = (await fs.readdir(DOCUMENTS_DIR)).filter(file => file.endsWith('.pdf'));
     if (files.length === 0) {
       return { success: false, count: 0, error: `No PDF files found in the directory: ${DOCUMENTS_DIR}` };
     }
@@ -116,7 +109,19 @@ export async function ingestDocuments(): Promise<{ success: boolean; count: numb
       console.log(`\n--- Processing file: ${fileName} ---`);
       
       const fullText = await extractTextFromPdf(filePath);
-      const chunks = await chunkText(fullText);
+      
+      if (fullText.length === 0) {
+        console.warn(`[SKIPPING] File ${fileName} could not be parsed or contains no text. Check if it's a scanned PDF.`);
+        continue; 
+      }
+      
+      const chunks = await splitter.splitText(fullText);
+
+      if (chunks.length === 0) {
+        console.warn(`[SKIPPING] File ${fileName} yielded text, but no chunks were created. Skipping ingestion.`);
+        continue;
+      }
+      
       const embeddings = await generateEmbeddings(chunks);
       
       const ids: string[] = [];
@@ -124,7 +129,10 @@ export async function ingestDocuments(): Promise<{ success: boolean; count: numb
       
       for (let i = 0; i < chunks.length; i++) {
         ids.push(`${fileName}-${i}`);
-        metadatas.push({ source: fileName, chunk_index: i });
+        metadatas.push({ 
+            source: fileName, 
+            chunk_index: i 
+        });
       }
       
       await collection.upsert({

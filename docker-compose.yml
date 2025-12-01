@@ -42,8 +42,22 @@ services:
       - IS_PERSISTENT=TRUE
       # Optional: disable telemetry
       - ANONYMIZED_TELEMETRY=FALSE
+      
+  portainer:
+    image: portainer/portainer-ce:latest # Using Community Edition (CE)
+    container_name: kummatty_portainer
+    restart: always
+    ports:
+      # Map host port 9000 to container port 9000
+      - "9000:9000" 
+    volumes:
+      # This volume persists Portainer's internal configuration data
+      - portainer_data:/data
+      # ⚠️ CRITICAL: Mount the Docker socket to allow Portainer to manage Docker
+      - /var/run/docker.sock:/var/run/docker.sock
     
 volumes:
   postgres_data:
   redis_data:
-  chroma_data: # New volume for Chroma persistence
+  chroma_data:
+  portainer_data:

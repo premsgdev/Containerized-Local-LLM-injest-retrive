@@ -25,6 +25,8 @@ const nextConfig: NextConfig = {
       // 2. Add 'chromadb-client' itself as an external module to ensure it's not processed
       // by the internal bundler, which helps resolve complex import chains.
       config.externals.push('chromadb-client');
+
+      config.externals.push('pdf-parse');
     }
 
     return config;
