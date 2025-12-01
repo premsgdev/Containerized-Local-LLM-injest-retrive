@@ -9,7 +9,7 @@ import pdf from 'pdf-parse';
 const DOCUMENTS_DIR = path.join(process.cwd(), 'documents');
 const COLLECTION_NAME = 'kummatty_policies';
 const EMBEDDING_MODEL = 'models/embedding-001';
-const CHROMA_HOST = process.env.CHROMA_HOST || 'http://localhost:8000';
+const CHROMA_HOST = process.env.CHROMA_HOST;
 const BATCH_SIZE = 100;
 
 const apiKey = process.env.GEMINI_API_KEY;
