@@ -4,17 +4,13 @@ import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { GoogleGenAI } from '@google/genai';
 import { ChromaClient } from 'chromadb-client';
 
-// --- PDF-PARSE REPLACEMENT: Using pdf2json ---
-// pdf2json provides a more stable interface for Node.js/Next.js environments.
 const PDFParser = require("pdf2json");
 
-// --- CONFIGURATION ---
 const DOCUMENTS_DIR = path.join(process.cwd(), 'documents');
 const COLLECTION_NAME = 'kummatty_policies';
 const EMBEDDING_MODEL = 'models/embedding-001';
 const CHROMA_HOST = process.env.CHROMA_HOST || 'http://localhost:8000';
 
-// Initialize AI and ChromaDB clients
 const apiKey = process.env.GEMINI_API_KEY;
 if (!apiKey) {
   throw new Error("GEMINI_API_KEY environment variable not set.");
@@ -22,11 +18,6 @@ if (!apiKey) {
 const ai = new GoogleGenAI({ apiKey });
 const chromaClient = new ChromaClient({ path: CHROMA_HOST });
 
-// --- RAG UTILITY FUNCTIONS ---
-
-/**
- * Ensures the ChromaDB collection exists and returns it.
- */
 async function getOrCreateCollection() {
   console.log(`Attempting to connect to Chroma at: ${CHROMA_HOST}`);
   
@@ -41,22 +32,17 @@ async function getOrCreateCollection() {
 }
 
 /**
- * Parses a PDF file content into plain text using pdf2json.
  * @param filePath The path to the PDF file.
  * @returns The extracted text.
  */
 async function extractTextFromPdf(filePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    // pdf2json requires instantiation and event handling
     const pdfParser = new PDFParser(null, 1);
     
-    // Success event listener
     pdfParser.on("pdfParser_dataReady", (pdfData: { Pages: { Texts: { R: { T: string }[] }[] }[] }) => {
-      // Concatenate text from all pages
       let fullText = "";
       
       pdfData.Pages.forEach(page => {
-        // pdf2json encodes text, we must decode and join
         const pageText = page.Texts
           .map(textBlock => textBlock.R)
           .flat()
@@ -69,18 +55,15 @@ async function extractTextFromPdf(filePath: string): Promise<string> {
       resolve(fullText);
     });
 
-    // Error event listener
     pdfParser.on("pdfParser_dataError", (errData: { parserError: string }) => {
       reject(new Error(`PDF parsing error: ${errData.parserError}`));
     });
 
-    // Load the file buffer directly
     pdfParser.loadPDF(filePath);
   });
 }
 
 /**
- * Splits text into manageable chunks for RAG.
  * @param text The full document text.
  * @returns An array of text chunks.
  */
@@ -96,7 +79,6 @@ async function chunkText(text: string): Promise<string[]> {
 }
 
 /**
- * Generates vector embeddings for a batch of text chunks.
  * @param chunks An array of text chunks.
  * @returns An array of embedding vectors.
  */
@@ -118,9 +100,6 @@ async function generateEmbeddings(chunks: string[]): Promise<number[][]> {
   return embeddings;
 }
 
-/**
- * Main function to ingest documents from the local directory into ChromaDB.
- */
 export async function ingestDocuments(): Promise<{ success: boolean; count: number; error?: string }> {
   try {
     const collection = await getOrCreateCollection();
@@ -148,7 +127,6 @@ export async function ingestDocuments(): Promise<{ success: boolean; count: numb
         metadatas.push({ source: fileName, chunk_index: i });
       }
       
-      // Store the chunks, embeddings, and metadata in ChromaDB
       await collection.upsert({
         ids: ids,
         embeddings: embeddings,

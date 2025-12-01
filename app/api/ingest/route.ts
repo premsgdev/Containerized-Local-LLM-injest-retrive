@@ -1,10 +1,6 @@
 import { NextResponse } from 'next/server';
 import { ingestDocuments } from '@/lib/ingestion';
 
-/**
- * Next.js Route Handler for Document Ingestion.
- * Handles POST requests to trigger the RAG data loading pipeline.
- */
 export async function POST() {
   console.log("Ingestion request received...");
   
